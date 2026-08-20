@@ -1,10 +1,17 @@
 From python:3.12-slim
 WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY webapp ./webapp
+RUN useradd --create-home appuser
+COPY --chown=appuser:appuser webapp ./webapp
+
+USER appuser
 
 EXPOSE 5000
 
-CMD ["python", "-m", "webapp.main"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--access-logfile", "-", "--error-logfile", "-", "webapp.main:app"]
 
