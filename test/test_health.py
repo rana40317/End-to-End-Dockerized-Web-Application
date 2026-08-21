@@ -1,4 +1,4 @@
-from app import create_app
+from webapp import create_app
 
 def test_health_endpoint(monkeypatch):
     app = create_app()
