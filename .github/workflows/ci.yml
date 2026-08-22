@@ -37,7 +37,8 @@ jobs:
          docker compose config
     - name: Build Docker image
       run: |
-        docker build -t production:webapp:test
+        docker build -t 
+        production:webapp:test .
     - name: Login to Github Container Registry
       if: github.event_name == 'push'
       uses: docker/login-action@v3
@@ -50,7 +51,10 @@ jobs:
       if: github.event_name == 'push'
       run: | 
         docker build \
-          - t ghcr.io/${{ github.repository_owner }}/end-to-end-dockerized-web-application:latest \
+          - t ghcr.io/$
+        {{ github.repository_owner }}/
+        end-to-end-dockerized-web-application:
+        latest \
 
     - name: Push Docker image to GHCR
       if: github.event_name == 'push'
