@@ -1,43 +1,58 @@
-name: CI Pipeline
+name: End to End Dockerized Web Application
+
+permissions:
+  contents: read
+  packages: write
 
 on:
   push:
     branches:
       - main
+
   pull_request:
     branches:
       - main
+
 
 jobs:
   test-and-build:
     runs-on: ubuntu-latest
 
-    env:
-      DB_HOST: db
-      DB_PORT: 5432
-      DB_NAME: production_db
-      DB_USER: ci_user
-      DB_PASSWORD: ci_password
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: set up python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+    - name: Install dependencies
+      run: | 
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+    - name: Run tests
+       run: |
+         docker compose config
+    - name: Build Docker image
+      run: |
+        docker build -t production:webapp:test
+    - name: Login to Github Container Registry
+      if: github.event_name == 'push'
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run tests
-        run: PYTHONPATH=. pytest -v
+    - name: Build ProductionDocker Image
+      if: github.event_name == 'push'
+      run: | 
+        docker build \
+          - t ghcr.io/${{ github.repository_onwer }}/end to end dockerized web application:latest \
 
-      - name: Validate Docker Compose
-        run: docker compose config
-
-      - name: Build Docker image
-        run: docker build -t production-webapp:test .
+    - name: Push Docker image to GHCR
+      if: github.event_name == 'push'
+      run: |
+        docker push ghcr.io/${{ github.repository_owner }}/end to end end dockerized web application:latest
