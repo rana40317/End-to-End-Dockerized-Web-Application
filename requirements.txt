@@ -1,5 +1,0 @@
-Flask==3.1.2
-pytest==8.4.1
-psycopg2-binary
-gunicorn
-prometheus-flask-exporter
