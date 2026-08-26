@@ -1,17 +1,16 @@
-name: End to End Dockerized Web Application
-
-permissions:
-  contents: read
-  packages: write
+name: CI/CD Pipeline
 
 on:
   push:
     branches:
       - main
-
   pull_request:
     branches:
       - main
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
   test-and-build:
@@ -31,6 +30,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Run tests
+        run: |
+          if [ -d "tests" ]; then
+            python -m pytest tests/
+          else
+            echo "No tests directory found. Skipping tests."
+          fi
+
       - name: Validate Docker Compose
         run: |
           docker compose config
@@ -47,7 +54,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Production Docker Image
+      - name: Build Production Docker image
         if: github.event_name == 'push'
         run: |
           docker build \
@@ -57,4 +64,10 @@ jobs:
       - name: Push Docker image to GHCR
         if: github.event_name == 'push'
         run: |
-          docker push ghcr.io/${{ github.repository_owner }}/end-to-end-dockerized-web-application:latest
+          docker push \
+            ghcr.io/${{ github.repository_owner }}/end-to-end-dockerized-web-application:latest
+
+      - name: Post Set up Python
+        if: always()
+        run: |
+          echo "CI/CD pipeline completed."
