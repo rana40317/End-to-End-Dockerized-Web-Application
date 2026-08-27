@@ -28,11 +28,17 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           else
             echo "requirements.txt not found"
+            exit 1
           fi
+
+      - name: Install test dependencies
+        run: |
+          pip install pytest
 
       - name: Validate Python code
         run: |
@@ -40,48 +46,41 @@ jobs:
 
       - name: Run tests
         run: |
-          if [ -d tests ]; then
-            python -m pytest tests
+          if [ -d test ]; then
+            pytest test
+          elif [ -d tests ]; then
+            pytest tests
           else
-            echo "No tests directory found. Skipping tests."
+            echo "No test directory found. Skipping tests."
           fi
 
       - name: Validate Docker Compose
         run: |
           if [ -f docker-compose.yml ]; then
             docker compose config
+          elif [ -f docker-compose.yaml ]; then
+            docker compose -f docker-compose.yaml config
           elif [ -f compose.yml ]; then
             docker compose -f compose.yml config
+          elif [ -f compose.yaml ]; then
+            docker compose -f compose.yaml config
           else
             echo "No Docker Compose file found. Skipping validation."
           fi
 
-      - name: Find Dockerfile
+      - name: Check Dockerfile
         run: |
-          DOCKERFILE=$(find . -type f -name "Dockerfile" | head -n 1)
-
-          if [ -z "$DOCKERFILE" ]; then
-            echo "ERROR: Dockerfile not found!"
-            echo "Repository files:"
-            find . -maxdepth 3 -type f | sort
+          if [ ! -f Dockerfile ]; then
+            echo "ERROR: Dockerfile not found in repository root."
+            echo "Please add Dockerfile to the root of the repository."
             exit 1
           fi
 
-          DOCKERFILE="${DOCKERFILE#./}"
-          DOCKER_DIR=$(dirname "$DOCKERFILE")
-
-          echo "Dockerfile found at: $DOCKERFILE"
-          echo "Docker build context: $DOCKER_DIR"
-
-          echo "DOCKERFILE=$DOCKERFILE" >> "$GITHUB_ENV"
-          echo "DOCKER_DIR=$DOCKER_DIR" >> "$GITHUB_ENV"
+          echo "Dockerfile found successfully."
 
       - name: Build Docker image
         run: |
-          docker build \
-            -f "$DOCKERFILE" \
-            -t webapp:test \
-            "$DOCKER_DIR"
+          docker build -t webapp:test .
 
       - name: Login to GitHub Container Registry
         if: github.event_name == 'push'
@@ -102,10 +101,9 @@ jobs:
         if: github.event_name == 'push'
         run: |
           docker build \
-            -f "$DOCKERFILE" \
             -t "$IMAGE_NAME:latest" \
             -t "$IMAGE_NAME:${{ github.sha }}" \
-            "$DOCKER_DIR"
+            .
 
       - name: Push latest Docker image to GHCR
         if: github.event_name == 'push'
@@ -119,4 +117,6 @@ jobs:
 
       - name: CI/CD completed
         run: |
-          echo "CI/CD pipeline completed successfully."
+          echo "======================================"
+          echo "CI/CD pipeline completed successfully"
+          echo "======================================"
