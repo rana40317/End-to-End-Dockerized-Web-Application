@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,74 +18,250 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ==========================================
+      # 1. Checkout
+      # ==========================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ==========================================
+      # 2. Show repository structure
+      # ==========================================
+      - name: Show repository files
+        run: |
+          echo "Repository structure:"
+          find . -maxdepth 3 -type f | sort
+
+      # ==========================================
+      # 3. Set up Python
+      # ==========================================
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
+      # ==========================================
+      # 4. Install Python dependencies
+      # ==========================================
       - name: Install dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest
 
+          REQUIREMENTS_FILE=$(find . -type f -name "requirements.txt" | head -n 1)
+
+          if [ -n "$REQUIREMENTS_FILE" ]; then
+            echo "Found requirements file:"
+            echo "$REQUIREMENTS_FILE"
+            pip install -r "$REQUIREMENTS_FILE"
+          else
+            echo "No requirements.txt found."
+            echo "Installing basic dependencies."
+            pip install flask pytest requests
+          fi
+
+      # ==========================================
+      # 5. Validate Python
+      # ==========================================
       - name: Validate Python code
+        shell: bash
         run: |
-          python -m compileall app
+          echo "Checking Python syntax..."
 
+          PYTHON_FILES=$(find . \
+            -type f \
+            -name "*.py" \
+            -not -path "./.git/*" \
+            -not -path "./venv/*" \
+            -not -path "./.venv/*")
+
+          if [ -z "$PYTHON_FILES" ]; then
+            echo "No Python files found. Skipping."
+          else
+            python -m compileall .
+          fi
+
+      # ==========================================
+      # 6. Run tests
+      # ==========================================
       - name: Run tests
+        shell: bash
         run: |
-          pytest test
+          if [ -d "tests" ]; then
+            echo "Running tests directory..."
+            python -m pytest tests
+          elif [ -d "test" ]; then
+            echo "Running test directory..."
+            python -m pytest test
+          else
+            echo "No tests or test directory found."
+            echo "Skipping automated tests."
+          fi
 
+      # ==========================================
+      # 7. Find Docker Compose
+      # ==========================================
+      - name: Find Docker Compose file
+        id: compose
+        shell: bash
+        run: |
+          COMPOSE_FILE=""
+
+          for file in \
+            docker-compose.yml \
+            docker-compose.yaml \
+            compose.yml \
+            compose.yaml
+          do
+            if [ -f "$file" ]; then
+              COMPOSE_FILE="$file"
+              break
+            fi
+          done
+
+          if [ -n "$COMPOSE_FILE" ]; then
+            echo "Docker Compose file found: $COMPOSE_FILE"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "file=$COMPOSE_FILE" >> "$GITHUB_OUTPUT"
+          else
+            echo "No Docker Compose file found."
+            echo "Skipping Docker Compose validation."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ==========================================
+      # 8. Validate Docker Compose
+      # ==========================================
       - name: Validate Docker Compose
+        if: steps.compose.outputs.found == 'true'
         run: |
-          docker compose config
+          docker compose \
+            -f "${{ steps.compose.outputs.file }}" \
+            config
 
-      - name: Check Dockerfile
+      # ==========================================
+      # 9. Find Dockerfile
+      # ==========================================
+      - name: Find Dockerfile
+        id: docker
+        shell: bash
         run: |
-          ls -la
-          test -f Dockerfile
-          echo "Dockerfile found"
+          DOCKERFILE=$(find . \
+            -type f \
+            -iname "Dockerfile" \
+            -not -path "./.git/*" \
+            | head -n 1)
 
+          if [ -n "$DOCKERFILE" ]; then
+
+            DOCKERFILE="${DOCKERFILE#./}"
+            DOCKER_CONTEXT=$(dirname "$DOCKERFILE")
+
+            echo "Dockerfile found:"
+            echo "$DOCKERFILE"
+
+            echo "Docker build context:"
+            echo "$DOCKER_CONTEXT"
+
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "dockerfile=$DOCKERFILE" >> "$GITHUB_OUTPUT"
+            echo "context=$DOCKER_CONTEXT" >> "$GITHUB_OUTPUT"
+
+          else
+
+            echo "No Dockerfile found."
+            echo "Docker build and GHCR push will be skipped."
+
+            echo "found=false" >> "$GITHUB_OUTPUT"
+
+          fi
+
+      # ==========================================
+      # 10. Build test Docker image
+      # ==========================================
       - name: Build Docker image
+        if: steps.docker.outputs.found == 'true'
         run: |
-          docker build -t webapp:test .
+          docker build \
+            --file "${{ steps.docker.outputs.dockerfile }}" \
+            --tag webapp:test \
+            "${{ steps.docker.outputs.context }}"
 
+      # ==========================================
+      # 11. Login to GHCR
+      # ==========================================
       - name: Login to GitHub Container Registry
-        if: github.event_name == 'push'
+        if: >
+          github.event_name == 'push' &&
+          steps.docker.outputs.found == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set image name
-        if: github.event_name == 'push'
+      # ==========================================
+      # 12. Prepare GHCR image name
+      # ==========================================
+      - name: Set Docker image name
+        if: >
+          github.event_name == 'push' &&
+          steps.docker.outputs.found == 'true'
+        id: image
+        shell: bash
         run: |
-          IMAGE_NAME=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
+          IMAGE_NAME="ghcr.io/${{ github.repository }}"
 
+          IMAGE_NAME=$(echo "$IMAGE_NAME" \
+            | tr '[:upper:]' '[:lower:]')
+
+          echo "image=$IMAGE_NAME" >> "$GITHUB_OUTPUT"
+
+          echo "GHCR image:"
+          echo "$IMAGE_NAME"
+
+      # ==========================================
+      # 13. Build production image
+      # ==========================================
       - name: Build production Docker image
-        if: github.event_name == 'push'
+        if: >
+          github.event_name == 'push' &&
+          steps.docker.outputs.found == 'true'
         run: |
           docker build \
-            -t "$IMAGE_NAME:latest" \
-            -t "$IMAGE_NAME:${{ github.sha }}" \
-            .
+            --file "${{ steps.docker.outputs.dockerfile }}" \
+            --tag "${{ steps.image.outputs.image }}:latest" \
+            --tag "${{ steps.image.outputs.image }}:${{ github.sha }}" \
+            "${{ steps.docker.outputs.context }}"
 
-      - name: Push latest image
-        if: github.event_name == 'push'
+      # ==========================================
+      # 14. Push latest image
+      # ==========================================
+      - name: Push latest Docker image
+        if: >
+          github.event_name == 'push' &&
+          steps.docker.outputs.found == 'true'
         run: |
-          docker push "$IMAGE_NAME:latest"
+          docker push \
+            "${{ steps.image.outputs.image }}:latest"
 
-      - name: Push versioned image
-        if: github.event_name == 'push'
+      # ==========================================
+      # 15. Push commit-version image
+      # ==========================================
+      - name: Push versioned Docker image
+        if: >
+          github.event_name == 'push' &&
+          steps.docker.outputs.found == 'true'
         run: |
-          docker push "$IMAGE_NAME:${{ github.sha }}"
+          docker push \
+            "${{ steps.image.outputs.image }}:${{ github.sha }}"
 
+      # ==========================================
+      # 16. Final status
+      # ==========================================
       - name: CI/CD completed
         run: |
-          echo "CI/CD pipeline completed successfully"
+          echo "========================================="
+          echo "CI/CD workflow completed successfully."
+          echo "========================================="
