@@ -18,107 +18,86 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ==========================================
-      # 1. Checkout
-      # ==========================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ==========================================
-      # 2. Show repository structure
-      # ==========================================
       - name: Show repository files
         run: |
-          echo "Repository structure:"
+          echo "Repository files:"
           find . -maxdepth 3 -type f | sort
 
-      # ==========================================
-      # 3. Set up Python
-      # ==========================================
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
 
-      # ==========================================
-      # 4. Install Python dependencies
-      # ==========================================
       - name: Install dependencies
         shell: bash
         run: |
           python -m pip install --upgrade pip
 
-          REQUIREMENTS_FILE=$(find . -type f -name "requirements.txt" | head -n 1)
+          REQUIREMENTS=$(find . -type f -name "requirements.txt" | head -n 1)
 
-          if [ -n "$REQUIREMENTS_FILE" ]; then
-            echo "Found requirements file:"
-            echo "$REQUIREMENTS_FILE"
-            pip install -r "$REQUIREMENTS_FILE"
+          if [ -n "$REQUIREMENTS" ]; then
+            echo "Found requirements file: $REQUIREMENTS"
+            pip install -r "$REQUIREMENTS"
           else
-            echo "No requirements.txt found."
-            echo "Installing basic dependencies."
-            pip install flask pytest requests
+            echo "requirements.txt not found."
+            echo "Installing basic project dependencies."
+            pip install flask pytest requests prometheus-client
           fi
 
-      # ==========================================
-      # 5. Validate Python
-      # ==========================================
       - name: Validate Python code
         shell: bash
         run: |
-          echo "Checking Python syntax..."
+          echo "Checking Python files..."
 
-          PYTHON_FILES=$(find . \
+          if find . \
             -type f \
             -name "*.py" \
             -not -path "./.git/*" \
-            -not -path "./venv/*" \
-            -not -path "./.venv/*")
+            | grep -q .; then
 
-          if [ -z "$PYTHON_FILES" ]; then
-            echo "No Python files found. Skipping."
-          else
             python -m compileall .
+
+          else
+            echo "No Python files found. Skipping validation."
           fi
 
-      # ==========================================
-      # 6. Run tests
-      # ==========================================
       - name: Run tests
         shell: bash
         run: |
-          if [ -d "tests" ]; then
-            echo "Running tests directory..."
-            python -m pytest tests
-          elif [ -d "test" ]; then
-            echo "Running test directory..."
+          if [ -d "test" ]; then
+            echo "Running tests from test/"
             python -m pytest test
+
+          elif [ -d "tests" ]; then
+            echo "Running tests from tests/"
+            python -m pytest tests
+
           else
-            echo "No tests or test directory found."
-            echo "Skipping automated tests."
+            echo "No test directory found."
+            echo "Skipping tests."
           fi
 
-      # ==========================================
-      # 7. Find Docker Compose
-      # ==========================================
       - name: Find Docker Compose file
         id: compose
         shell: bash
         run: |
           COMPOSE_FILE=""
 
-          for file in \
-            docker-compose.yml \
-            docker-compose.yaml \
-            compose.yml \
-            compose.yaml
-          do
-            if [ -f "$file" ]; then
-              COMPOSE_FILE="$file"
-              break
-            fi
-          done
+          if [ -f "docker-compose.yml" ]; then
+            COMPOSE_FILE="docker-compose.yml"
+
+          elif [ -f "docker-compose.yaml" ]; then
+            COMPOSE_FILE="docker-compose.yaml"
+
+          elif [ -f "compose.yml" ]; then
+            COMPOSE_FILE="compose.yml"
+
+          elif [ -f "compose.yaml" ]; then
+            COMPOSE_FILE="compose.yaml"
+          fi
 
           if [ -n "$COMPOSE_FILE" ]; then
             echo "Docker Compose file found: $COMPOSE_FILE"
@@ -126,13 +105,9 @@ jobs:
             echo "file=$COMPOSE_FILE" >> "$GITHUB_OUTPUT"
           else
             echo "No Docker Compose file found."
-            echo "Skipping Docker Compose validation."
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # ==========================================
-      # 8. Validate Docker Compose
-      # ==========================================
       - name: Validate Docker Compose
         if: steps.compose.outputs.found == 'true'
         run: |
@@ -140,9 +115,6 @@ jobs:
             -f "${{ steps.compose.outputs.file }}" \
             config
 
-      # ==========================================
-      # 9. Find Dockerfile
-      # ==========================================
       - name: Find Dockerfile
         id: docker
         shell: bash
@@ -158,11 +130,8 @@ jobs:
             DOCKERFILE="${DOCKERFILE#./}"
             DOCKER_CONTEXT=$(dirname "$DOCKERFILE")
 
-            echo "Dockerfile found:"
-            echo "$DOCKERFILE"
-
-            echo "Docker build context:"
-            echo "$DOCKER_CONTEXT"
+            echo "Dockerfile found: $DOCKERFILE"
+            echo "Docker context: $DOCKER_CONTEXT"
 
             echo "found=true" >> "$GITHUB_OUTPUT"
             echo "dockerfile=$DOCKERFILE" >> "$GITHUB_OUTPUT"
@@ -171,97 +140,62 @@ jobs:
           else
 
             echo "No Dockerfile found."
-            echo "Docker build and GHCR push will be skipped."
+            echo "Docker build steps will be skipped."
 
             echo "found=false" >> "$GITHUB_OUTPUT"
 
           fi
 
-      # ==========================================
-      # 10. Build test Docker image
-      # ==========================================
       - name: Build Docker image
         if: steps.docker.outputs.found == 'true'
         run: |
           docker build \
-            --file "${{ steps.docker.outputs.dockerfile }}" \
-            --tag webapp:test \
+            -f "${{ steps.docker.outputs.dockerfile }}" \
+            -t webapp:test \
             "${{ steps.docker.outputs.context }}"
 
-      # ==========================================
-      # 11. Login to GHCR
-      # ==========================================
       - name: Login to GitHub Container Registry
-        if: >
-          github.event_name == 'push' &&
-          steps.docker.outputs.found == 'true'
+        if: github.event_name == 'push' && steps.docker.outputs.found == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ==========================================
-      # 12. Prepare GHCR image name
-      # ==========================================
-      - name: Set Docker image name
-        if: >
-          github.event_name == 'push' &&
-          steps.docker.outputs.found == 'true'
+      - name: Set GHCR image name
+        if: github.event_name == 'push' && steps.docker.outputs.found == 'true'
         id: image
         shell: bash
         run: |
           IMAGE_NAME="ghcr.io/${{ github.repository }}"
-
-          IMAGE_NAME=$(echo "$IMAGE_NAME" \
-            | tr '[:upper:]' '[:lower:]')
+          IMAGE_NAME=$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
 
           echo "image=$IMAGE_NAME" >> "$GITHUB_OUTPUT"
 
-          echo "GHCR image:"
+          echo "Image name:"
           echo "$IMAGE_NAME"
 
-      # ==========================================
-      # 13. Build production image
-      # ==========================================
       - name: Build production Docker image
-        if: >
-          github.event_name == 'push' &&
-          steps.docker.outputs.found == 'true'
+        if: github.event_name == 'push' && steps.docker.outputs.found == 'true'
         run: |
           docker build \
-            --file "${{ steps.docker.outputs.dockerfile }}" \
-            --tag "${{ steps.image.outputs.image }}:latest" \
-            --tag "${{ steps.image.outputs.image }}:${{ github.sha }}" \
+            -f "${{ steps.docker.outputs.dockerfile }}" \
+            -t "${{ steps.image.outputs.image }}:latest" \
+            -t "${{ steps.image.outputs.image }}:${{ github.sha }}" \
             "${{ steps.docker.outputs.context }}"
 
-      # ==========================================
-      # 14. Push latest image
-      # ==========================================
-      - name: Push latest Docker image
-        if: >
-          github.event_name == 'push' &&
-          steps.docker.outputs.found == 'true'
+      - name: Push latest Docker image to GHCR
+        if: github.event_name == 'push' && steps.docker.outputs.found == 'true'
         run: |
-          docker push \
-            "${{ steps.image.outputs.image }}:latest"
+          docker push "${{ steps.image.outputs.image }}:latest"
 
-      # ==========================================
-      # 15. Push commit-version image
-      # ==========================================
-      - name: Push versioned Docker image
-        if: >
-          github.event_name == 'push' &&
-          steps.docker.outputs.found == 'true'
+      - name: Push versioned Docker image to GHCR
+        if: github.event_name == 'push' && steps.docker.outputs.found == 'true'
         run: |
-          docker push \
-            "${{ steps.image.outputs.image }}:${{ github.sha }}"
+          docker push "${{ steps.image.outputs.image }}:${{ github.sha }}"
 
-      # ==========================================
-      # 16. Final status
-      # ==========================================
       - name: CI/CD completed
         run: |
-          echo "========================================="
-          echo "CI/CD workflow completed successfully."
-          echo "========================================="
+          echo "======================================"
+          echo "CI/CD pipeline completed successfully"
+          echo "======================================"
